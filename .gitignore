@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment variables (contains passwords)
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Legacy/local-only scripts
+db/0000_*
+db/0001_*
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
