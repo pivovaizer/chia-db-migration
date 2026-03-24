@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from utils import connect_pg  # noqa: E402
+from utils.pg_utils import connect_pg  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # DDL — index creation

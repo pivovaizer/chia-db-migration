@@ -1,8 +1,12 @@
-"""Извлечение и отображение балансов адресов из SQLite для n блоков."""
-import sqlite3
+"""Extract and display address balances from SQLite for the first N blocks."""
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import sqlite3
 from collections import defaultdict
-from chia.util.bech32m import decode_puzzle_hash, encode_puzzle_hash
+from utils.bech32m import encode_puzzle_hash
 
 DB_PATH = Path(r"C:\Users\pivovaizer\Downloads\mainnet\blockchain_v2_mainnet.sqlite")
 MAX_HEIGHT = 100

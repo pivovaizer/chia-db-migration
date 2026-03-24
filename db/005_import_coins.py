@@ -17,15 +17,9 @@ from psycopg2.extras import execute_values  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 
 from config import BATCH_SIZE_COINS, IMPORT_STEP  # noqa: E402
-from utils import (  # noqa: E402
-    blob_to_int,
-    connect_pg,
-    connect_sqlite,
-    ensure_sync_state,
-    get_sqlite_tip,
-    get_state,
-    set_state,
-)
+from utils.blob_to_int import blob_to_int  # noqa: E402
+from utils.pg_utils import connect_pg, ensure_sync_state, get_state, set_state  # noqa: E402
+from utils.sqlite_utils import connect_sqlite, get_sqlite_tip  # noqa: E402
 
 _COINS_QUERY = """
     SELECT coin_name, puzzle_hash, coin_parent, amount,
