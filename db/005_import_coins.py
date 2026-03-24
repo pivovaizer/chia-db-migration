@@ -27,7 +27,6 @@ from utils import (  # noqa: E402
     set_state,
 )
 
-# SQL-запрос для выборки монет из SQLite (один диапазон высот по created_height)
 _COINS_QUERY = """
     SELECT coin_name, puzzle_hash, coin_parent, amount,
            confirmed_index, spent_index, coinbase
@@ -39,46 +38,10 @@ _COINS_QUERY = """
 
 
 # ---------------------------------------------------------------------------
-# Импорт одного диапазона монет
+# Batch insert
 # ---------------------------------------------------------------------------
 
-def import_coins_range(sqlite_conn, pg_conn, start_h: int, end_h: int) -> None:
-    """Импортировать монеты (по created_height) из [start_h, end_h].
-
-    Args:
-        sqlite_conn: Открытое соединение с SQLite (Chia).
-        pg_conn:     Открытое соединение с PostgreSQL.
-        start_h:     Начальная высота диапазона (включительно).
-        end_h:       Конечная высота диапазона (включительно).
-    """
-    s_cur = sqlite_conn.cursor()
-    p_cur = pg_conn.cursor()
-
-    print(f"\n🪙 Монеты {start_h}..{end_h}")
-    s_cur.execute(_COINS_QUERY, (start_h, end_h))
-
-    batch: list = []
-    for coin_id, ph, parent, amount_blob, created_h, spent_h, coinbase in tqdm(s_cur, desc="Coins", unit="coin"):
-        amount       = blob_to_int(amount_blob)
-        # spent_index = 0 в SQLite означает "не потрачена" (NULL в нашей схеме)
-        spent_height = None if (spent_h is None or int(spent_h) == 0) else int(spent_h)
-
-        batch.append((coin_id, ph, parent, amount, int(created_h), spent_height, bool(coinbase)))
-
-        if len(batch) >= BATCH_SIZE_COINS:
-            _flush_coins(p_cur, pg_conn, batch)
-            batch.clear()
-
-    if batch:
-        _flush_coins(p_cur, pg_conn, batch)
-
-    p_cur.close()
-    s_cur.close()
-    print("✅ Диапазон монет готов.")
-
-
 def _flush_coins(cur, conn, batch: list) -> None:
-    """Вставить батч монет в PostgreSQL и сделать commit."""
     execute_values(
         cur,
         """
@@ -93,46 +56,78 @@ def _flush_coins(cur, conn, batch: list) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Точка входа — главный цикл с resume
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("🔗 Подключение к SQLite...")
-    sqlite_conn = connect_sqlite()  # read-only
+    print("Connecting to SQLite...")
+    sqlite_conn = connect_sqlite()
 
-    print("🔗 Подключение к PostgreSQL...")
+    print("Connecting to PostgreSQL...")
     pg_conn = connect_pg()
 
     try:
         ensure_sync_state(pg_conn)
 
         tip = get_sqlite_tip(sqlite_conn)
-        print(f"📌 SQLite tip (main chain): {tip}")
+        print(f"SQLite tip (main chain): {tip}")
 
-        # Читаем последний сохранённый прогресс
         last = get_state(pg_conn, "coins_height", default=-1)
         if last < 0:
-            # Sync_state пустой — подтягиваем факт из уже загруженных данных
             with pg_conn.cursor() as cur:
                 cur.execute("SELECT COALESCE(MAX(created_height), -1) FROM coins")
                 last = int(cur.fetchone()[0])
             set_state(pg_conn, "coins_height", last)
 
         start = last + 1
-        print(f"📌 Resume: coins_height={last} -> start={start}")
+        print(f"Resume: coins_height={last} -> start={start}")
 
         if start > tip:
-            print("✅ Монеты уже на tip.")
+            print("Coins already at tip.")
             return
 
-        while start <= tip:
-            end = min(start + IMPORT_STEP - 1, tip)
-            import_coins_range(sqlite_conn, pg_conn, start, end)
-            set_state(pg_conn, "coins_height", end)
-            print(f"✅ Прогресс: {end}")
-            start = end + 1
+        # Count total coins to import for accurate progress bar
+        s_count = sqlite_conn.cursor()
+        s_count.execute(
+            "SELECT COUNT(*) FROM coin_record WHERE confirmed_index >= ?",
+            (start,),
+        )
+        total_coins = s_count.fetchone()[0]
+        s_count.close()
+        print(f"Coins to import: {total_coins:,}")
 
-        print("🎉 Импорт монет завершён.")
+        s_cur = sqlite_conn.cursor()
+        p_cur = pg_conn.cursor()
+
+        with tqdm(total=total_coins, desc="Coins", unit="coin") as pbar:
+            while start <= tip:
+                end = min(start + IMPORT_STEP - 1, tip)
+
+                s_cur.execute(_COINS_QUERY, (start, end))
+
+                batch: list = []
+                for coin_id, ph, parent, amount_blob, created_h, spent_h, coinbase in s_cur:
+                    amount = blob_to_int(amount_blob)
+                    spent_height = None if (spent_h is None or int(spent_h) == 0) else int(spent_h)
+
+                    batch.append((coin_id, ph, parent, amount, int(created_h), spent_height, bool(coinbase)))
+
+                    if len(batch) >= BATCH_SIZE_COINS:
+                        _flush_coins(p_cur, pg_conn, batch)
+                        pbar.update(len(batch))
+                        batch.clear()
+
+                if batch:
+                    _flush_coins(p_cur, pg_conn, batch)
+                    pbar.update(len(batch))
+
+                set_state(pg_conn, "coins_height", end)
+                start = end + 1
+
+        s_cur.close()
+        p_cur.close()
+
+        print("Coin import complete.")
 
     finally:
         pg_conn.close()

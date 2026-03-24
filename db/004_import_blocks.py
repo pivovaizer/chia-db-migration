@@ -26,7 +26,6 @@ from utils import (  # noqa: E402
     set_state,
 )
 
-# SQL-запрос для выборки блоков из SQLite (один диапазон высот)
 _BLOCKS_QUERY = """
     SELECT
         fb.height,
@@ -34,8 +33,6 @@ _BLOCKS_QUERY = """
         fb.prev_hash,
         COALESCE(MAX(cr_cb.timestamp), 0) AS block_timestamp,
 
-        -- Блок считается транзакционным, если в нём есть трата или
-        -- non-coinbase монета — это приближение (SQLite не хранит флаг напрямую).
         CASE
             WHEN EXISTS (
                 SELECT 1 FROM coin_record cr_s
@@ -63,42 +60,10 @@ _BLOCKS_QUERY = """
 
 
 # ---------------------------------------------------------------------------
-# Импорт одного диапазона блоков
+# Batch insert
 # ---------------------------------------------------------------------------
 
-def import_blocks_range(sqlite_conn, pg_conn, start_h: int, end_h: int) -> None:
-    """Импортировать блоки высот [start_h, end_h] из SQLite в PostgreSQL.
-
-    Args:
-        sqlite_conn: Открытое соединение с SQLite (Chia).
-        pg_conn:     Открытое соединение с PostgreSQL.
-        start_h:     Начальная высота диапазона (включительно).
-        end_h:       Конечная высота диапазона (включительно).
-    """
-    s_cur = sqlite_conn.cursor()
-    p_cur = pg_conn.cursor()
-
-    print(f"\n🧱 Блоки {start_h}..{end_h}")
-    s_cur.execute(_BLOCKS_QUERY, (start_h, end_h))
-
-    batch: list = []
-    for height, header_hash, prev_hash, ts, is_tx in tqdm(s_cur, desc="Blocks", unit="blk"):
-        batch.append((int(height), header_hash, prev_hash, int(ts), bool(is_tx)))
-
-        if len(batch) >= BATCH_SIZE_BLOCKS:
-            _flush_blocks(p_cur, pg_conn, batch)
-            batch.clear()
-
-    if batch:
-        _flush_blocks(p_cur, pg_conn, batch)
-
-    p_cur.close()
-    s_cur.close()
-    print("✅ Диапазон блоков готов.")
-
-
 def _flush_blocks(cur, conn, batch: list) -> None:
-    """Вставить батч блоков в PostgreSQL и сделать commit."""
     execute_values(
         cur,
         """
@@ -113,46 +78,66 @@ def _flush_blocks(cur, conn, batch: list) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Точка входа — главный цикл с resume
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("🔗 Подключение к SQLite...")
-    sqlite_conn = connect_sqlite()  # read-only
+    print("Connecting to SQLite...")
+    sqlite_conn = connect_sqlite()
 
-    print("🔗 Подключение к PostgreSQL...")
+    print("Connecting to PostgreSQL...")
     pg_conn = connect_pg()
 
     try:
         ensure_sync_state(pg_conn)
 
         tip = get_sqlite_tip(sqlite_conn)
-        print(f"📌 SQLite tip (main chain): {tip}")
+        print(f"SQLite tip (main chain): {tip}")
 
-        # Читаем последний сохранённый прогресс
         last = get_state(pg_conn, "blocks_height", default=-1)
         if last < 0:
-            # Sync_state пустой — подтягиваем факт из уже загруженных данных
             with pg_conn.cursor() as cur:
                 cur.execute("SELECT COALESCE(MAX(height), -1) FROM blocks")
                 last = int(cur.fetchone()[0])
             set_state(pg_conn, "blocks_height", last)
 
         start = last + 1
-        print(f"📌 Resume: blocks_height={last} -> start={start}")
+        print(f"Resume: blocks_height={last} -> start={start}")
 
         if start > tip:
-            print("✅ Блоки уже на tip.")
+            print("Blocks already at tip.")
             return
 
-        while start <= tip:
-            end = min(start + IMPORT_STEP - 1, tip)
-            import_blocks_range(sqlite_conn, pg_conn, start, end)
-            set_state(pg_conn, "blocks_height", end)
-            print(f"✅ Прогресс: {end}")
-            start = end + 1
+        total = tip - last
+        s_cur = sqlite_conn.cursor()
+        p_cur = pg_conn.cursor()
 
-        print("🎉 Импорт блоков завершён.")
+        with tqdm(total=total, desc="Blocks", unit="blk") as pbar:
+            while start <= tip:
+                end = min(start + IMPORT_STEP - 1, tip)
+
+                s_cur.execute(_BLOCKS_QUERY, (start, end))
+
+                batch: list = []
+                for height, header_hash, prev_hash, ts, is_tx in s_cur:
+                    batch.append((int(height), header_hash, prev_hash, int(ts), bool(is_tx)))
+
+                    if len(batch) >= BATCH_SIZE_BLOCKS:
+                        _flush_blocks(p_cur, pg_conn, batch)
+                        pbar.update(len(batch))
+                        batch.clear()
+
+                if batch:
+                    _flush_blocks(p_cur, pg_conn, batch)
+                    pbar.update(len(batch))
+
+                set_state(pg_conn, "blocks_height", end)
+                start = end + 1
+
+        s_cur.close()
+        p_cur.close()
+
+        print("Block import complete.")
 
     finally:
         pg_conn.close()
