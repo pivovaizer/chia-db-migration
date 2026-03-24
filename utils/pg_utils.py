@@ -1,11 +1,11 @@
-"""Вспомогательные функции для работы с PostgreSQL.
+"""PostgreSQL helper functions.
 
-Предоставляет:
-  - Фабрику подключения (connect_pg)
-  - Управление таблицей sync_state для возобновляемого импорта
+Provides:
+  - Connection factory (connect_pg)
+  - sync_state table management for resumable imports
 
-sync_state — это простое key/value-хранилище в PostgreSQL, которое позволяет
-скриптам импорта продолжить работу с того места, где они остановились.
+sync_state is a simple key/value store in PostgreSQL that allows
+import scripts to resume from where they left off.
 """
 from __future__ import annotations
 
@@ -16,33 +16,22 @@ from config import PG_DSN
 
 
 # ---------------------------------------------------------------------------
-# Подключение
+# Connection
 # ---------------------------------------------------------------------------
 
 def connect_pg() -> PgConnection:
-    """Открыть и вернуть новое psycopg2-соединение (autocommit=False).
-
-    Returns:
-        Открытое соединение с PostgreSQL.
-    """
+    """Open and return a new psycopg2 connection (autocommit=False)."""
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
     return conn
 
 
 # ---------------------------------------------------------------------------
-# sync_state — контрольные точки для возобновляемого импорта
+# sync_state — checkpoints for resumable imports
 # ---------------------------------------------------------------------------
 
 def ensure_sync_state(conn: PgConnection) -> None:
-    """Создать таблицу sync_state, если она ещё не существует.
-
-    sync_state хранит пары ключ/значение (TEXT → BIGINT), которые позволяют
-    скриптам импорта продолжить после прерывания или ошибки.
-
-    Args:
-        conn: Активное соединение с PostgreSQL.
-    """
+    """Create the sync_state table if it doesn't exist yet."""
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sync_state (
@@ -54,16 +43,7 @@ def ensure_sync_state(conn: PgConnection) -> None:
 
 
 def get_state(conn: PgConnection, key: str, default: int = -1) -> int:
-    """Прочитать значение прогресса из sync_state.
-
-    Args:
-        conn:    Активное соединение с PostgreSQL.
-        key:     Ключ состояния (например, "blocks_height").
-        default: Значение по умолчанию, если ключ отсутствует.
-
-    Returns:
-        Сохранённое целое значение или *default*.
-    """
+    """Read a progress value from sync_state."""
     with conn.cursor() as cur:
         cur.execute("SELECT value FROM sync_state WHERE key = %s", (key,))
         row = cur.fetchone()
@@ -71,13 +51,7 @@ def get_state(conn: PgConnection, key: str, default: int = -1) -> int:
 
 
 def set_state(conn: PgConnection, key: str, value: int) -> None:
-    """Сохранить (upsert) значение прогресса в sync_state и сделать commit.
-
-    Args:
-        conn:  Активное соединение с PostgreSQL.
-        key:   Ключ состояния.
-        value: Значение высоты блока или счётчика для сохранения.
-    """
+    """Upsert a progress value into sync_state and commit."""
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO sync_state (key, value)

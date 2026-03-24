@@ -1,13 +1,13 @@
-"""Миграция 001 — Создание начальной схемы PostgreSQL.
+"""Migration 001 — Create initial PostgreSQL schema.
 
-Создаёт три таблицы:
-  - blocks          : заголовки блоков главной цепи
-  - coins           : UTXO-монеты в стиле Chia
-  - block_tx_details: опциональный JSON-кэш деталей блока (RPC)
+Creates three tables:
+  - blocks          : main chain block headers
+  - coins           : Chia UTXO coins
+  - block_tx_details: optional JSON cache of block details (RPC)
 
-Все операции идемпотентны (IF NOT EXISTS) — скрипт можно запускать повторно.
+All operations are idempotent (IF NOT EXISTS) — safe to re-run.
 
-Использование:
+Usage:
     python db/001_init_schema.py
 """
 from __future__ import annotations
@@ -15,20 +15,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Добавляем корень проекта в sys.path — иначе импорты utils/config не найдутся
-# при запуске из любой директории (не только из корня).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils import connect_pg  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# DDL — определение схемы
+# DDL — schema definition
 # ---------------------------------------------------------------------------
 
 DDL = """
--- -----------------------------------------------------------------------
--- blocks — один ряд на каждый заголовок блока главной цепи
--- -----------------------------------------------------------------------
+-- blocks — one row per main chain block header
 CREATE TABLE IF NOT EXISTS blocks (
     height               BIGINT  PRIMARY KEY,
     header_hash          BYTEA   UNIQUE NOT NULL,
@@ -37,47 +33,42 @@ CREATE TABLE IF NOT EXISTS blocks (
     is_transaction_block BOOLEAN NOT NULL DEFAULT FALSE
 );
 
--- Индекс для поиска блоков по диапазону времени
 CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks (timestamp);
 
 
--- -----------------------------------------------------------------------
--- coins — UTXO-модель Chia: один ряд на монету
--- -----------------------------------------------------------------------
+-- coins — Chia UTXO model: one row per coin
 CREATE TABLE IF NOT EXISTS coins (
     coin_id        BYTEA  PRIMARY KEY,
-    puzzle_hash    BYTEA  NOT NULL,            -- Chia-адрес (puzzle hash)
+    puzzle_hash    BYTEA  NOT NULL,
     parent_coin_id BYTEA  NOT NULL,
-    amount         BIGINT NOT NULL CHECK (amount >= 0),   -- в mojo
-    created_height BIGINT NOT NULL,            -- блок, в котором монета создана
-    spent_height   BIGINT NULL,                -- NULL = монета не потрачена (UTXO)
-    coinbase       BOOLEAN NOT NULL DEFAULT FALSE          -- True = блочная награда
+    amount         BIGINT NOT NULL CHECK (amount >= 0),
+    created_height BIGINT NOT NULL,
+    spent_height   BIGINT NULL,                -- NULL = unspent (UTXO)
+    coinbase       BOOLEAN NOT NULL DEFAULT FALSE
 
-    -- FK намеренно не добавлены: они замедляют массовый импорт.
-    -- После завершения загрузки их можно включить и провалидировать:
+    -- FKs intentionally omitted: they slow down bulk imports.
+    -- Can be added after import for validation:
     -- ,CONSTRAINT fk_coins_created FOREIGN KEY (created_height) REFERENCES blocks(height)
     -- ,CONSTRAINT fk_coins_spent   FOREIGN KEY (spent_height)   REFERENCES blocks(height)
 );
 
--- Баланс / UTXO адреса: WHERE puzzle_hash = ? AND spent_height IS NULL
+-- Address balance / UTXO: WHERE puzzle_hash = ? AND spent_height IS NULL
 CREATE INDEX IF NOT EXISTS idx_coins_ph_spent   ON coins (puzzle_hash, spent_height);
 
--- История монет адреса: WHERE puzzle_hash = ? ORDER BY created_height
+-- Address coin history: WHERE puzzle_hash = ? ORDER BY created_height
 CREATE INDEX IF NOT EXISTS idx_coins_ph_created ON coins (puzzle_hash, created_height);
 
--- Outputs блока: WHERE created_height = ?
+-- Block outputs: WHERE created_height = ?
 CREATE INDEX IF NOT EXISTS idx_coins_created_h  ON coins (created_height);
 
--- Inputs блока (потраченные): WHERE spent_height = ?
+-- Block inputs (spent): WHERE spent_height = ?
 CREATE INDEX IF NOT EXISTS idx_coins_spent_h    ON coins (spent_height);
 
--- Блочные награды: WHERE coinbase = TRUE AND created_height = ?
+-- Block rewards: WHERE coinbase = TRUE AND created_height = ?
 CREATE INDEX IF NOT EXISTS idx_coins_coinbase_h ON coins (coinbase, created_height);
 
 
--- -----------------------------------------------------------------------
--- block_tx_details — опциональный JSON-кэш деталей блока (из RPC)
--- -----------------------------------------------------------------------
+-- block_tx_details — optional JSON cache of block details (from RPC)
 CREATE TABLE IF NOT EXISTS block_tx_details (
     height         BIGINT      PRIMARY KEY REFERENCES blocks (height) ON DELETE CASCADE,
     header_hash    BYTEA       NOT NULL,
@@ -91,21 +82,21 @@ CREATE INDEX IF NOT EXISTS idx_block_tx_details_hash ON block_tx_details (header
 
 
 # ---------------------------------------------------------------------------
-# Точка входа
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("🔗 Подключение к PostgreSQL...")
+    print("Connecting to PostgreSQL...")
     conn = connect_pg()
     try:
         with conn.cursor() as cur:
-            print("🧱 Применение DDL-схемы...")
+            print("Applying DDL schema...")
             cur.execute(DDL)
         conn.commit()
-        print("✅ Схема создана успешно.")
+        print("Schema created successfully.")
     except Exception as exc:
         conn.rollback()
-        print("❌ Миграция не удалась:", exc)
+        print("Migration failed:", exc)
         raise
     finally:
         conn.close()

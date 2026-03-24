@@ -1,13 +1,13 @@
 """Migration 003 — Full database reset.
 
 Clears all data from blocks, coins, block_tx_details and sync_state tables.
-Опционально удаляет вторичные индексы таблицы coins (для ускорения повторного импорта).
+Optionally drops secondary indexes on coins to speed up the next import.
 
-⚠️ ВНИМАНИЕ: Это деструктивная операция! Все данные будут удалены.
-   Используй только перед полным повторным импортом.
+WARNING: This is a destructive operation. All data will be deleted.
+Use only before a full re-import.
 
-Использование:
-    python db/005_reset_db.py
+Usage:
+    python db/003_reset_db.py
 """
 from __future__ import annotations
 
@@ -19,20 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils import connect_pg  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Настройки
+# Settings
 # ---------------------------------------------------------------------------
 
-# True = удалить вторичные индексы coins (ускоряет следующий импорт)
-# После импорта пересоздай их: python db/008_create_index_after_import.py
+# True = drop secondary coin indexes (speeds up the next import)
+# After import, recreate them with: python db/006_create_indexes.py
 DROP_SECONDARY_COIN_INDEXES: bool = True
 
 
 # ---------------------------------------------------------------------------
-# Вспомогательные функции
+# Helper functions
 # ---------------------------------------------------------------------------
 
 def _truncate_all_tables(cur) -> None:
-    """Очистить все таблицы через TRUNCATE, безопасно обходя отсутствие sync_state."""
+    """Truncate all tables, safely handling missing sync_state."""
     cur.execute("""
         DO $$
         BEGIN
@@ -46,7 +46,7 @@ def _truncate_all_tables(cur) -> None:
 
 
 def _drop_secondary_coin_indexes(cur) -> None:
-    """Удалить все вторичные индексы таблицы coins, оставив только первичный ключ."""
+    """Drop all secondary indexes on coins, keeping only the primary key."""
     cur.execute("""
         SELECT indexname
         FROM pg_indexes
@@ -56,21 +56,20 @@ def _drop_secondary_coin_indexes(cur) -> None:
     indexes = cur.fetchall()
 
     for (name,) in indexes:
-        # Пропускаем PRIMARY KEY-индекс (обычно заканчивается на _pkey)
         if name.endswith("_pkey"):
             continue
         cur.execute(f'DROP INDEX IF EXISTS "{name}";')
 
 
 def _print_counts(cur) -> None:
-    """Вывести количество строк в основных таблицах после сброса."""
+    """Print row counts for main tables after reset."""
     for table in ("blocks", "coins", "block_tx_details"):
         cur.execute(f"SELECT COUNT(*) FROM {table};")
         print(f"  {table}: {cur.fetchone()[0]}")
 
 
 def _print_remaining_indexes(cur) -> None:
-    """Вывести оставшиеся индексы таблицы coins."""
+    """Print remaining indexes on coins table."""
     cur.execute("""
         SELECT indexname
         FROM pg_indexes
@@ -82,36 +81,35 @@ def _print_remaining_indexes(cur) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Точка входа
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     conn = connect_pg()
     try:
         with conn.cursor() as cur:
-            print("🧹 TRUNCATE всех таблиц...")
+            print("Truncating all tables...")
             _truncate_all_tables(cur)
 
             if DROP_SECONDARY_COIN_INDEXES:
-                print("🧨 Удаление вторичных индексов coins (оставляем только PK)...")
+                print("Dropping secondary coin indexes (keeping PK only)...")
                 _drop_secondary_coin_indexes(cur)
-                print("✅ Вторичные индексы удалены.")
+                print("Secondary indexes dropped.")
 
         conn.commit()
 
-        # Проверка — выводим счётчики и оставшиеся индексы
         with conn.cursor() as cur:
-            print("\n📌 Строк после сброса:")
+            print("\nRow counts after reset:")
             _print_counts(cur)
 
-            print("\n📌 Оставшиеся индексы coins:")
+            print("\nRemaining indexes on coins:")
             _print_remaining_indexes(cur)
 
-        print("\n🎉 Сброс завершён.")
+        print("\nReset complete.")
 
     except Exception as exc:
         conn.rollback()
-        print("❌ Сброс не удался:", exc)
+        print("Reset failed:", exc)
         raise
     finally:
         conn.close()

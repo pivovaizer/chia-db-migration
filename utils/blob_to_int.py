@@ -1,14 +1,11 @@
-"""Декодирование BLOB-суммы Chia в Python int.
+"""Decode Chia BLOB amounts to Python int.
 
-Chia хранит суммы монет (в mojo) как переменной длины big-endian integers
-в SQLite BLOB-полях. Этот модуль предоставляет надёжный декодер,
-который обрабатывает крайние случаи:
-  - ведущие нулевые байты
-  - oversized BLOB (длиннее 8 байт)
-  - memoryview-входы вместо bytes
-  - None-входы
+Chia stores coin amounts (in mojo) as variable-length big-endian integers
+in SQLite BLOB fields. This module provides a robust decoder that handles
+edge cases: leading zero bytes, oversized BLOBs (>8 bytes), memoryview
+inputs, and None inputs.
 
-Значение должно вписываться в PostgreSQL BIGINT (signed 64-bit).
+The value must fit into a PostgreSQL BIGINT (signed 64-bit).
 """
 from __future__ import annotations
 
@@ -16,22 +13,13 @@ from config import BIGINT_MAX
 
 
 def blob_to_int(value: bytes | memoryview | None) -> int:
-    """Декодировать BLOB-поле amount из SQLite в int, совместимый с BIGINT.
+    """Decode a BLOB amount field from SQLite into a BIGINT-compatible int.
 
-    Стратегия декодирования:
-      1. Обрезаем ведущие нулевые байты, декодируем как big-endian.
-      2. Если BLOB длиннее 8 байт — берём последние 8 байт
-         и пробуем оба порядка (big/little), выбираем наименьший допустимый.
-      3. Если ни один вариант не влезает в BIGINT — бросаем ValueError.
-
-    Args:
-        value: Сырые байты, memoryview или None из SQLite.
-
-    Returns:
-        Неотрицательное целое — количество mojo.
-
-    Raises:
-        ValueError: Если значение не укладывается в signed 64-bit integer.
+    Decoding strategy:
+      1. Strip leading zero bytes, decode as big-endian.
+      2. If BLOB is longer than 8 bytes, take the last 8 bytes
+         and try both byte orders (big/little), pick the smallest valid one.
+      3. If neither fits in BIGINT, raise ValueError.
     """
     if value is None:
         return 0
@@ -43,15 +31,15 @@ def blob_to_int(value: bytes | memoryview | None) -> int:
     if not raw:
         return 0
 
-    # --- Быстрый путь: big-endian без ведущих нулей ---
+    # Fast path: big-endian without leading zeros
     stripped = raw.lstrip(b"\x00")
     if 0 < len(stripped) <= 8:
         candidate = int.from_bytes(stripped, "big", signed=False)
         if candidate <= BIGINT_MAX:
             return candidate
 
-    # --- Запасной путь: анализируем последние 8 байт ---
-    # Chia иногда добавляет паддинг-байты спереди; хвост — реальное значение.
+    # Fallback: analyze the last 8 bytes
+    # Chia sometimes adds padding bytes in front; the tail is the real value.
     tail = raw[-8:] if len(raw) > 8 else raw
     big_endian    = int.from_bytes(tail, "big",    signed=False)
     little_endian = int.from_bytes(tail, "little", signed=False)
@@ -61,6 +49,6 @@ def blob_to_int(value: bytes | memoryview | None) -> int:
         return min(valid)
 
     raise ValueError(
-        f"BLOB-сумма не помещается в BIGINT "
+        f"BLOB amount does not fit in BIGINT "
         f"(len={len(raw)}, big={big_endian}, little={little_endian})"
     )

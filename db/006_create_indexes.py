@@ -1,13 +1,13 @@
 """Migration 006 — Create secondary indexes after full import.
 
 Run AFTER import (004/005) is complete and tables are populated.
-Создавать индексы после загрузки данных — намного быстрее, чем держать их
-активными во время INSERT (PostgreSQL перестраивает индекс инкрементально).
+Creating indexes after loading data is much faster than keeping them
+active during INSERTs.
 
-Все операции идемпотентны (IF NOT EXISTS).
+All operations are idempotent (IF NOT EXISTS).
 
-Использование:
-    python db/008_create_index_after_import.py
+Usage:
+    python db/006_create_indexes.py
 """
 from __future__ import annotations
 
@@ -19,63 +19,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils import connect_pg  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# DDL — создание индексов
+# DDL — index creation
 # ---------------------------------------------------------------------------
 
 DDL = """
--- -----------------------------------------------------------------------
 -- blocks
--- -----------------------------------------------------------------------
-
--- Поиск блоков по временному диапазону
 CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks (timestamp);
 
-
--- -----------------------------------------------------------------------
--- coins
--- -----------------------------------------------------------------------
-
--- Баланс / UTXO адреса: WHERE puzzle_hash = ? AND spent_height IS NULL
+-- coins: address balance / UTXO
 CREATE INDEX IF NOT EXISTS idx_coins_ph_spent   ON coins (puzzle_hash, spent_height);
 
--- История монет адреса: WHERE puzzle_hash = ? ORDER BY created_height
+-- coins: address coin history
 CREATE INDEX IF NOT EXISTS idx_coins_ph_created ON coins (puzzle_hash, created_height);
 
--- Outputs блока: WHERE created_height = ?
+-- coins: block outputs
 CREATE INDEX IF NOT EXISTS idx_coins_created_h  ON coins (created_height);
 
--- Inputs блока (потраченные): WHERE spent_height = ?
+-- coins: block inputs (spent)
 CREATE INDEX IF NOT EXISTS idx_coins_spent_h    ON coins (spent_height);
 
--- Блочные награды: WHERE coinbase = TRUE AND created_height = ?
+-- coins: block rewards
 CREATE INDEX IF NOT EXISTS idx_coins_coinbase_h ON coins (coinbase, created_height);
 
-
--- -----------------------------------------------------------------------
--- block_tx_details
--- -----------------------------------------------------------------------
-
--- Поиск кэша по header_hash
+-- block_tx_details: lookup by header_hash
 CREATE INDEX IF NOT EXISTS idx_block_tx_details_hash ON block_tx_details (header_hash);
 """
 
 
 # ---------------------------------------------------------------------------
-# Точка входа
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("🔗 Подключение к PostgreSQL...")
+    print("Connecting to PostgreSQL...")
     conn = connect_pg()
     try:
         with conn.cursor() as cur:
-            print("🧱 Создание индексов (это может занять несколько минут)...")
+            print("Creating indexes (this may take a few minutes)...")
             cur.execute(DDL)
         conn.commit()
-        print("✅ Индексы созданы.")
+        print("Indexes created.")
     except Exception as exc:
         conn.rollback()
-        print("❌ Ошибка:", exc)
+        print("Error:", exc)
         raise
     finally:
         conn.close()

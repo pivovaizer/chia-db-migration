@@ -1,7 +1,7 @@
-"""Вспомогательные функции для работы с SQLite-базой Chia-ноды.
+"""SQLite helper functions for the Chia node database.
 
-Предоставляет безопасное (read-only по умолчанию) подключение к
-локальной SQLite-базе блокчейна и утилиты для получения метаданных.
+Provides a safe (read-only by default) connection to the local
+blockchain SQLite database and metadata utilities.
 """
 from __future__ import annotations
 
@@ -15,28 +15,21 @@ def connect_sqlite(
     *,
     readonly: bool = True,
 ) -> sqlite3.Connection:
-    """Открыть SQLite-базу Chia и вернуть соединение.
+    """Open the Chia SQLite database and return a connection.
 
-    По умолчанию открывается в режиме read-only (uri mode), чтобы
-    случайно не повредить живую базу данных ноды.
+    Opens in read-only mode by default to avoid accidentally
+    corrupting the live node database.
 
     Args:
-        path:     Путь к .sqlite-файлу (по умолчанию из config).
-        readonly: Если True — открыть в режиме чтения (безопасно для ноды).
-                  Передай False, если нужно создавать индексы или писать.
-
-    Returns:
-        Открытое соединение sqlite3.
-
-    Raises:
-        SystemExit: Если файл не найден по указанному пути.
+        path:     Path to the .sqlite file (default from config).
+        readonly: If True, open in read-only mode (safe for the node).
+                  Pass False if you need to create indexes or write.
     """
     import os
     if not os.path.exists(path):
-        raise SystemExit(f"❌ SQLite-база не найдена: {path}")
+        raise SystemExit(f"SQLite database not found: {path}")
 
     if readonly:
-        # URI mode: ?mode=ro гарантирует, что запись невозможна
         uri = f"file:{path}?mode=ro"
         return sqlite3.connect(uri, uri=True)
 
@@ -44,14 +37,7 @@ def connect_sqlite(
 
 
 def get_sqlite_tip(conn: sqlite3.Connection) -> int:
-    """Вернуть высоту текущего tip главной цепи из SQLite.
-
-    Args:
-        conn: Открытое соединение к базе блокчейна Chia.
-
-    Returns:
-        Максимальная высота в full_blocks где in_main_chain = 1, или 0.
-    """
+    """Return the current main chain tip height from SQLite."""
     cur = conn.cursor()
     cur.execute("SELECT MAX(height) FROM full_blocks WHERE in_main_chain = 1")
     tip = cur.fetchone()[0]

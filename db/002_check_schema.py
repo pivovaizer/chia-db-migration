@@ -1,9 +1,9 @@
-"""Миграция 002 — Проверка структуры схемы PostgreSQL.
+"""Migration 002 — Verify PostgreSQL schema structure.
 
-Выводит список таблиц, колонок и индексов для быстрой диагностики.
-Запускай после 001_init_schema.py чтобы убедиться, что схема создана корректно.
+Prints tables, columns, and indexes for quick diagnostics.
+Run after 001_init_schema.py to confirm the schema was created correctly.
 
-Использование:
+Usage:
     python db/002_check_schema.py
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from utils import connect_pg  # noqa: E402
 
 
 def query(conn, sql: str, params: tuple = ()) -> list:
-    """Выполнить SQL и вернуть все строки результата."""
+    """Execute SQL and return all result rows."""
     with conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
@@ -26,8 +26,7 @@ def query(conn, sql: str, params: tuple = ()) -> list:
 def main() -> None:
     conn = connect_pg()
     try:
-        # --- Список таблиц ---
-        print("\n📌 Таблицы в схеме public:")
+        print("\nTables in public schema:")
         for (name,) in query(conn, """
             SELECT tablename
             FROM pg_catalog.pg_tables
@@ -36,8 +35,7 @@ def main() -> None:
         """):
             print(f"  - {name}")
 
-        # --- Колонки: blocks ---
-        print("\n📌 Колонки: blocks")
+        print("\nColumns: blocks")
         for row in query(conn, """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
@@ -46,8 +44,7 @@ def main() -> None:
         """):
             print(" ", row)
 
-        # --- Колонки: coins ---
-        print("\n📌 Колонки: coins")
+        print("\nColumns: coins")
         for row in query(conn, """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
@@ -56,8 +53,7 @@ def main() -> None:
         """):
             print(" ", row)
 
-        # --- Индексы: coins ---
-        print("\n📌 Индексы: coins")
+        print("\nIndexes: coins")
         for name, definition in query(conn, """
             SELECT indexname, indexdef
             FROM pg_indexes
@@ -66,7 +62,7 @@ def main() -> None:
         """):
             print(f"  - {name}\n    {definition}")
 
-        print("\n✅ Готово.")
+        print("\nDone.")
     finally:
         conn.close()
 
